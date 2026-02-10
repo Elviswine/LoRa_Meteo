@@ -32,7 +32,21 @@
 // --- DISPLAY SETTINGS ---
 #define DISPLAY_RST   GPIO10
 #define DISPLAY_GEOM  GEOMETRY_128_64
-#define DEBUG_OLED true
+#define DEBUG_OLED true  
+
+// --- DEBUG SETTINGS ---
+#define DEBUG_SERIAL  true
+
+// Macro per debug condizionale - elimina completamente il codice quando DEBUG_SERIAL = false
+#if DEBUG_SERIAL
+  #define DEBUG_PRINT(x)       Serial.print(x)
+  #define DEBUG_PRINTLN(x)     Serial.println(x)
+  #define DEBUG_PRINTF(...)    Serial.printf(__VA_ARGS__)
+#else
+  #define DEBUG_PRINT(x)       ((void)0)
+  #define DEBUG_PRINTLN(x)     ((void)0)
+  #define DEBUG_PRINTF(...)    ((void)0)
+#endif
 
 // --- TIMING ---
 #define MEASURE_INTERVAL_MS 30000 // 30 Secondi
