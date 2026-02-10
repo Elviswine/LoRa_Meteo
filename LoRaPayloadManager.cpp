@@ -1,15 +1,25 @@
 #include "LoRaPayloadManager.h"
 
 // Inclusione necessaria per variabili globali generali (g_battery_mV ecc.)
-#include "Config.h"
 #include "Globals.h"
+#include "Config.h"
 #include "OneWireMgr.h"
-#include "Wind.h"            // *** NUOVO: Per accedere all'oggetto wind ***
-#include "tca_i2c_manager.h" // Fix: Include per accedere a tca_sensors
+#include "Wind.h" // *** NUOVO: Per accedere all'oggetto wind ***
 
 // --- FIX PER ERRORE COMPILAZIONE ---
-// -----------------------------------
-// FIX: Rimozioni extern vecchi (ora in tca_i2c_manager.h)
+// Dichiarazione esplicita delle variabili esterne definite altrove (es. nel main o tca manager)
+extern bool bme280_online[];
+extern float bme280_temperature[];
+extern float bme280_humidity[];
+extern float bme280_pressure[];
+
+extern bool sht4x_online[];
+extern float sht4x_temperature[];
+extern float sht4x_humidity[];
+
+extern bool sht3x_online[];
+extern float sht3x_temperature[];
+extern float sht3x_humidity[];
 // -----------------------------------
 
 LoRaPayloadManager PayloadMgr;
@@ -26,24 +36,19 @@ LoRaPayloadManager::LoRaPayloadManager() {
 }
 
 int16_t LoRaPayloadManager::encodeTemp(float val) {
-  if (isnan(val))
-    return -32768; // Error code (int16 min)
+  if (isnan(val)) return -32768; // Error code (int16 min)
   return (int16_t)(val * 100.0);
 }
 
 uint8_t LoRaPayloadManager::encodeHum(float val) {
-  if (isnan(val))
-    return 255; // Error code
-  if (val > 100)
-    return 100;
-  if (val < 0)
-    return 0;
+  if (isnan(val)) return 255; // Error code
+  if (val > 100) return 100;
+  if (val < 0) return 0;
   return (uint8_t)round(val);
 }
 
 uint16_t LoRaPayloadManager::encodePres(float val) {
-  if (isnan(val) || val <= 0)
-    return 0;
+  if (isnan(val) || val <= 0) return 0;
   // Esempio: 931.9 hPa -> 9319
   return (uint16_t)(val * 10.0);
 }
@@ -52,25 +57,30 @@ uint16_t LoRaPayloadManager::encodePres(float val) {
 uint8_t LoRaPayloadManager::encodeWindDir(uint8_t direction) {
   // Direzione già codificata come enum 0-15
   // Valore 255 = errore/non disponibile
-  if (direction > 15)
-    return 255;
+  if (direction > 15) return 255;
   return direction;
 }
 
-void LoRaPayloadManager::getTcaSensorData(uint8_t channel, float &t, float &h,
-                                          float &p) {
+void LoRaPayloadManager::getTcaSensorData(uint8_t channel, float &t, float &h, float &p) {
   // Init valori a NAN di default
-  t = NAN;
-  h = NAN;
-  p = NAN;
+  t = NAN; h = NAN; p = NAN;
 
-  if (channel > 1)
-    return;
+  if (channel > 1) return;
 
-  if (tca_sensors[channel].online) {
-    t = tca_sensors[channel].temperature;
-    h = tca_sensors[channel].humidity;
-    p = tca_sensors[channel].pressure;
+  if (bme280_online[channel]) {
+    t = bme280_temperature[channel];
+    h = bme280_humidity[channel];
+    p = bme280_pressure[channel]; // <--- BME ha la pressione
+  }
+  else if (sht4x_online[channel]) {
+    t = sht4x_temperature[channel];
+    h = sht4x_humidity[channel];
+    p = NAN; // SHT4x non ha pressione
+  }
+  else if (sht3x_online[channel]) {
+    t = sht3x_temperature[channel];
+    h = sht3x_humidity[channel];
+    p = NAN; // SHT3x non ha pressione
   }
 }
 
@@ -116,31 +126,35 @@ void LoRaPayloadManager::preparePayload() {
   payload.adc3_mV = 65535;
 }
 
-uint8_t *LoRaPayloadManager::getBuffer() { return (uint8_t *)&payload; }
+uint8_t* LoRaPayloadManager::getBuffer() {
+  return (uint8_t*)&payload;
+}
 
-uint8_t LoRaPayloadManager::getSize() { return sizeof(AppPayload); }
+uint8_t LoRaPayloadManager::getSize() {
+  return sizeof(AppPayload);
+}
 
 void LoRaPayloadManager::debugPrint() {
-  DEBUG_PRINTLN(F("\n--- LORA PAYLOAD DEBUG ---"));
-  DEBUG_PRINTF(PSTR("[LORA] CH0 T: %d, H: %d\n"), payload.temp1, payload.hum1);
-  DEBUG_PRINTF(PSTR("[LORA] CH1 T: %d, H: %d\n"), payload.temp2, payload.hum2);
-  DEBUG_PRINTF(PSTR("[LORA] DS Air: %d, Gnd: %d\n"), payload.tempDS_Air,
-               payload.tempDS_Gnd);
-  DEBUG_PRINTF(PSTR("[LORA] Rain: %d\n"), payload.rainCount);
-
+  Serial.println("\n--- LORA PAYLOAD DEBUG ---");
+  Serial.printf("[LORA] CH0 T: %d, H: %d\n", payload.temp1, payload.hum1);
+  Serial.printf("[LORA] CH1 T: %d, H: %d\n", payload.temp2, payload.hum2);
+  Serial.printf("[LORA] DS Air: %d, Gnd: %d\n", payload.tempDS_Air, payload.tempDS_Gnd);
+  Serial.printf("[LORA] Rain: %d\n", payload.rainCount);
+  
   // *** NUOVO: Stampa Direzione Vento ***
-  DEBUG_PRINTF(PSTR("[LORA] Wind: %s (%d)\n"), wind.directionToString(),
-               payload.windDirection);
-
-  DEBUG_PRINTF(PSTR("[LORA] Pwr: B=%d mV, S=%d mV, I=%d mA\n"), payload.batt_mV,
-               payload.solar_mV, payload.solar_mA);
-  DEBUG_PRINTF(PSTR("[LORA] Total Size: %d bytes\n"), sizeof(AppPayload));
-  DEBUG_PRINTLN(F("--------------------------\n"));
+  Serial.printf("[LORA] Wind: %s (%d)\n", wind.directionToString(), payload.windDirection);
+  
+  Serial.printf("[LORA] Pwr: B=%d mV, S=%d mV, I=%d mA\n",
+                payload.batt_mV, payload.solar_mV, payload.solar_mA);
+  Serial.printf("[LORA] Total Size: %d bytes\n", sizeof(AppPayload));
+  Serial.println("--------------------------\n");
 }
 
 void LoRaPayloadManager::handleDownlink(McpsIndication_t *mcpsIndication) {
-  DEBUG_PRINTF(PSTR("[LoRa] DOWNLINK: port %d, rssi %d, snr %d\n"),
-               mcpsIndication->Port, mcpsIndication->Rssi, mcpsIndication->Snr);
+  Serial.printf("[LoRa] DOWNLINK: port %d, rssi %d, snr %d\n",
+                mcpsIndication->Port,
+                mcpsIndication->Rssi,
+                mcpsIndication->Snr);
 
   // Cattura parametri downlink
   last_rssi = mcpsIndication->Rssi;
@@ -148,30 +162,30 @@ void LoRaPayloadManager::handleDownlink(McpsIndication_t *mcpsIndication) {
   downlink_counter++;
 
   // Processa payload se necessario
-  if (mcpsIndication->BufferSize > 0) {
-    DEBUG_PRINT(F("[LoRa] RX Data: "));
-    for (uint8_t i = 0; i < mcpsIndication->BufferSize; i++) {
-      DEBUG_PRINTF(PSTR("%02X "), mcpsIndication->Buffer[i]);
+  if(mcpsIndication->BufferSize > 0) {
+    Serial.print("[LoRa] RX Data: ");
+    for(uint8_t i = 0; i < mcpsIndication->BufferSize; i++) {
+      Serial.printf("%02X ", mcpsIndication->Buffer[i]);
     }
-    DEBUG_PRINTLN();
+    Serial.println();
     // QUI puoi aggiungere logica per processare comandi downlink
     // Es: if(mcpsIndication->Port == 10) { ... }
   }
 }
 
 void LoRaPayloadManager::handleTxDone() {
-  DEBUG_PRINTLN(F("[LoRa] TX Done"));
+  Serial.println("[LoRa] TX Done");
   last_tx_success = true;
   uplink_counter++;
 }
 
 void LoRaPayloadManager::handleTxTimeout() {
-  DEBUG_PRINTLN(F("[LoRa] TX Timeout"));
+  Serial.println("[LoRa] TX Timeout");
   last_tx_success = false;
 }
 
 void LoRaPayloadManager::handleTxConfirmed() {
-  DEBUG_PRINTLN(F("[LoRa] TX Confirmed (ACK received)"));
+  Serial.println("[LoRa] TX Confirmed (ACK received)");
   // Opzionale: potresti incrementare un contatore separato per ACK
 }
 
@@ -179,8 +193,7 @@ void LoRaPayloadManager::captureTxParams(uint8_t datarate, int8_t txPower) {
   last_datarate = datarate;
   last_txpower = txPower;
   last_tx_success = false; // Reset, verrà impostato da handleTxDone()
-  DEBUG_PRINTF(PSTR("[LoRa] TX Params: DR=%d, TxPower=%d dBm\n"), datarate,
-               txPower);
+  Serial.printf("[LoRa] TX Params: DR=%d, TxPower=%d dBm\n", datarate, txPower);
 }
 
 void LoRaPayloadManager::updateTxParamsFromMAC() {
@@ -188,13 +201,13 @@ void LoRaPayloadManager::updateTxParamsFromMAC() {
 
   // 1. Chiedi al sistema: Quale DR stai usando ORA?
   mibReq.Type = MIB_CHANNELS_DATARATE;
-  if (LoRaMacMibGetRequestConfirm(&mibReq) == LORAMAC_STATUS_OK) {
+  if(LoRaMacMibGetRequestConfirm(&mibReq) == LORAMAC_STATUS_OK) {
     last_datarate = mibReq.Param.ChannelsDatarate;
   }
 
   // 2. Chiedi al sistema: A che potenza trasmetti?
   mibReq.Type = MIB_CHANNELS_TX_POWER;
-  if (LoRaMacMibGetRequestConfirm(&mibReq) == LORAMAC_STATUS_OK) {
+  if(LoRaMacMibGetRequestConfirm(&mibReq) == LORAMAC_STATUS_OK) {
     last_txpower = mibReq.Param.ChannelsTxPower;
   }
 }

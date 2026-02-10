@@ -22,6 +22,11 @@ enum SensorType : uint8_t {
 #define TCA_ADDR_DEFAULT 0x71
 #define TCA_NUM_CHANNELS 8
 
+// Possibili indirizzi sensori (auto-detect)
+static const uint8_t SHT3X_ADDRESSES[] = {0x44, 0x45};
+static const uint8_t SHT4X_ADDRESSES[] = {0x44, 0x45};  // SHT4X usa stessi indirizzi
+static const uint8_t BME280_ADDRESSES[] = {0x76, 0x77};
+
 // Config canali (MODIFICA QUI per cambiare sensori)
 // Esempio: CH0=SHT3X, CH1=BME280, CH2=SHT4X, CH3=SHT3X (secondo)
 static const SensorType TCA_CH_TYPE[TCA_NUM_CHANNELS] = {
@@ -35,23 +40,28 @@ static const SensorType TCA_CH_TYPE[TCA_NUM_CHANNELS] = {
     SENS_NONE    // CH7
 };
 
+// Indirizzi scoperti (riempiti da initAsync)
+extern uint8_t TCA_CH_ADDR[TCA_NUM_CHANNELS];
+
 // ============================================================================
 // VARIABILI GLOBALI - DATI SENSORI (globali per accesso facile dal main)
 // ============================================================================
 
-struct SensorData {
-    float temperature = NAN;
-    float humidity = NAN;
-    float pressure = NAN;
-    bool online = false;
-    SensorType type = SENS_NONE;
-};
+// SHT3X (su qualsiasi canale configurato SENS_SHT3X)
+extern float sht3x_temperature[TCA_NUM_CHANNELS];
+extern float sht3x_humidity[TCA_NUM_CHANNELS];
+extern bool  sht3x_online[TCA_NUM_CHANNELS];
 
-// Array unico certificato per risparmio RAM
-extern SensorData tca_sensors[TCA_NUM_CHANNELS];
+// SHT4X (su qualsiasi canale configurato SENS_SHT4X)
+extern float sht4x_temperature[TCA_NUM_CHANNELS];
+extern float sht4x_humidity[TCA_NUM_CHANNELS];
+extern bool  sht4x_online[TCA_NUM_CHANNELS];
 
-// Indirizzi scoperti (riempiti da initAsync)
-extern uint8_t TCA_CH_ADDR[TCA_NUM_CHANNELS];
+// BME280 (su qualsiasi canale configurato SENS_BME280)
+extern float bme280_temperature[TCA_NUM_CHANNELS];
+extern float bme280_humidity[TCA_NUM_CHANNELS];
+extern float bme280_pressure[TCA_NUM_CHANNELS];
+extern bool  bme280_online[TCA_NUM_CHANNELS];
 
 // ============================================================================
 // CLASSE MANAGER
