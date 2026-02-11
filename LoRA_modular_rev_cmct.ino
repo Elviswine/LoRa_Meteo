@@ -3,8 +3,6 @@
  */
 
 #include "Arduino.h"
-#pragma GCC optimize("-Os")
-#pragma GCC optimize("-flto")
 #include "LoRaWan_APP.h" // <--- IMPORTANTE: Deve essere il primo include
 #include <Wire.h>
 
@@ -37,10 +35,7 @@ uint32_t devAddr = (uint32_t)0x00000000;
 
 // 3. PARAMETRI RADIO
 uint16_t userChannelsMask[6] = {0x00FF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000};
-/*
- * set LoraWan_Region to EU868
- */
-LoRaMacRegion_t loraWanRegion = LORAMAC_REGION_EU868;
+LoRaMacRegion_t loraWanRegion = ACTIVE_REGION;
 DeviceClass_t loraWanClass = CLASS_A;
 
 uint32_t appTxDutyCycle = 15000;
@@ -50,9 +45,6 @@ bool isTxConfirmed = true;
 uint8_t appPort = 2;
 uint8_t confirmedNbTrials = 4;
 bool keepNet = true; // Salva la sessione in deep sleep
-// Parametri TX correnti (da aggiornare manualmente)
-uint8_t current_dr = 5;    // DR5 = SF7 (sarà aggiornato da ADR)
-int8_t current_txpwr = 14; // 14 dBm EU868 default
 
 // ========================================
 // ISTANZE DEGLI OGGETTI
@@ -76,8 +68,8 @@ void setup() {
   delay(500);
 #endif
 
-  DEBUG_PRINTLN(F("\n\n===== CubeCell AB02 Monitor ====="));
-  DEBUG_PRINTLN(F("Init Hardware..."));
+  DEBUG_PRINTLN("\n\n===== CubeCell AB02 Monitor =====");
+  DEBUG_PRINTLN("Init Hardware...");
   // Radio.SetTxConfig(MODEM_LORA, 22, 0, 125000, 7, 4, 8, false, true, 0, 0,
   // false, 3000);  // TX=14 dBm max EU
 
@@ -93,30 +85,30 @@ void setup() {
   digitalWrite(VBAT_ADC_CTL, HIGH);
 
   // 2. INIT BUS
-  DEBUG_PRINTLN(F("Init I2C Bus..."));
+  DEBUG_PRINTLN("Init I2C Bus...");
   Wire1.begin(SENSORS_SDA, SENSORS_SCL);
   delay(200);
 
   // 3. INIT MODULI SENSORI
   if (DEBUG_OLED) {
-    DEBUG_PRINT(F("Init Display..."));
+    DEBUG_PRINT("Init Display...");
     displayUnit.init();
     delay(100);
 
-    DEBUG_PRINTLN(F(" DONE!"));
+    DEBUG_PRINTLN(" DONE!");
   }
 
-  DEBUG_PRINTLN(F("Init Counter CD4040..."));
+  DEBUG_PRINTLN("Init Counter CD4040...");
   counterUnit.init();
   delay(100);
-  DEBUG_PRINTLN(F(" Counter DONE!"));
+  DEBUG_PRINTLN(" Counter DONE!");
 
-  DEBUG_PRINTLN(F("Init Power Measure INA 219..."));
+  DEBUG_PRINTLN("Init Power Measure INA 219...");
   powerUnit.initINA();
   delay(100);
-  DEBUG_PRINTLN(F(" Power DONE!"));
+  DEBUG_PRINTLN(" Power DONE!");
 
-  DEBUG_PRINT(F("Init TCA9548A Multiplexer..."));
+  DEBUG_PRINT("Init TCA9548A Multiplexer...");
   TCA.setWire(Wire1);
   delay(100);
   TCA.initAsync();
@@ -125,36 +117,34 @@ void setup() {
   if (TCA.isInitialized()) {
     DEBUG_PRINTF("[TCA] DONE! (0x%02X)\n", TCA.getTcaAddress());
     delay(100);
-#if DEBUG_SERIAL
     TCA.printDiscoveryResults();
-#endif
     delay(100);
   } else {
-    DEBUG_PRINTLN(F(" FAILED!"));
+    DEBUG_PRINTLN(" FAILED!");
   }
 
-  DEBUG_PRINTLN(F("----- Init DS2482 Multiplexer..."));
+  DEBUG_PRINTLN("----- Init DS2482 Multiplexer...");
   if (DS_SCAN_NEW_PROBE) {
 
     DS.scan();
   }
-  DEBUG_PRINTLN(F("------ DONE."));
+  DEBUG_PRINTLN("------ DONE.");
 
-  DEBUG_PRINT(F("Init Wind Sensor..."));
+  DEBUG_PRINT("Init Wind Sensor...");
   if (wind.init()) {
-    DEBUG_PRINTLN(F(" DONE!"));
+    DEBUG_PRINTLN(" DONE!");
   } else {
-    DEBUG_PRINTLN(F(" FAILED (Check wiring/address)"));
+    DEBUG_PRINTLN(" FAILED (Check wiring/address)");
   }
 
   delay(2500);
 
   // 4. INIT LORAWAN
-  DEBUG_PRINT(F("Init LoRaWAN Stack..."));
+  DEBUG_PRINT("Init LoRaWAN Stack...");
   LoRaWAN.init(loraWanClass, loraWanRegion);
-  DEBUG_PRINTLN(F(" DONE!"));
+  DEBUG_PRINTLN(" DONE!");
 
-  DEBUG_PRINTLN(F("---------- Setup completato! ----------\n"));
+  DEBUG_PRINTLN("---------- Setup completato! ----------\n");
 
   // Inizializza il timer
   TimerInit(&g_sleepTimer, onWakeUpTimer);
@@ -202,17 +192,25 @@ void runStateMachine() {
   switch (g_currentState) {
 
   case STATE_IDLE: {
+    g_cycleCount++;
 
-    powerUnit.powerOUTon();
-    delay(50);
+    // Calcolo X.Y.Z
+    // X = g_txCount + 1 (Ciclo di invio attuale)
+    // Y = Ciclo base all'interno del blocco TX (1 a LORA_TX_MULT)
+    // Z = Ciclo base all'interno del blocco B (1 a GROUP_B_MULT)
+    uint32_t X = g_txCount + 1;
+    uint32_t Y = ((g_cycleCount - 1) % LORA_TX_MULT) + 1;
+    uint32_t Z = ((g_cycleCount - 1) % GROUP_B_MULT) + 1;
+
+    DEBUG_PRINTF("\n\n>>> WAKE UP! Counter %d.%d.%d (Total Cycles: %d) <<<\n",
+                 X, Y, Z, g_cycleCount);
 
     if (!IsLoRaMacNetworkJoined) {
-      DEBUG_PRINTLN(F("[LORA] Not Joined. Starting Join process..."));
+      DEBUG_PRINTLN("[LORA] Not Joined. Starting Join process...");
       LoRaWAN.join();
-      g_currentState = STATE_WAIT_FOR_JOIN; // Vai alla "dogana" e aspetta
+      g_currentState = STATE_WAIT_FOR_JOIN;
     } else {
-      DEBUG_PRINTLN(F("[LORA] Already Joined."));
-      g_currentState = STATE_READ_GROUP_A; // Vai diretto ai sensori
+      g_currentState = STATE_READ_GROUP_A;
     }
   } break;
 
@@ -225,7 +223,7 @@ void runStateMachine() {
 
     // A. CASO SUCCESSO: Siamo connessi!
     if (IsLoRaMacNetworkJoined) {
-      DEBUG_PRINTLN(F("[LORA] Join Success! Proceeding to sensors..."));
+      DEBUG_PRINTLN("[LORA] Join Success! Proceeding to sensors...");
       joinStartTs = 0; // Reset timer
       g_currentState =
           STATE_READ_GROUP_A; // ORA possiamo leggere i sensori sicuri
@@ -233,46 +231,124 @@ void runStateMachine() {
     // B. CASO TIMEOUT: Se dopo 60 secondi non si collega (Gateway spento?),
     // dormiamo
     else if (millis() - joinStartTs > 60000) {
-      DEBUG_PRINTLN(F("[LORA] Join Failed (Timeout). Sleep and retry later."));
+      DEBUG_PRINTLN("[LORA] Join Failed (Timeout). Sleep and retry later.");
       joinStartTs = 0; // Reset timer
       g_currentState =
           STATE_PREPARE_SLEEP; // Saltiamo tutto e riproviamo al prossimo ciclo
     }
     // C. CASO ATTESA: Rimaniamo qui (il loop chiamerà LoRaWAN.sleep())
     else {
-      DEBUG_PRINT(F("."));
+      DEBUG_PRINT(".");
       // Non serve fare altro, il LoRaWAN.sleep() nel loop gestirà RX1/RX2
     }
     break;
 
   case STATE_READ_GROUP_A: {
-    DEBUG_PRINTLN(F("---------------- READ GROUP A. ---------------"));
+    DEBUG_PRINTLN("---------------- READ GROUP A (T1: Wind Speed + ADC2) "
+                  "---------------");
 
+    powerUnit.powerT1on();
+
+    // Misura velocità vento (Counter Hardware)
+    counterUnit.measure();
+
+    // Lettura ADC 2 (Anemometro analogico o Aux)
+    uint16_t adcRaw = analogRead(ADC_WIND_S);
+    g_adc2_mV = (uint16_t)((adcRaw * 2400.0) / 4096.0);
+
+    // Accumulo per media
+    g_adc2_sum += (float)g_adc2_mV;
+    g_adc2_count++;
+
+    DEBUG_PRINTF("[READ A] ADC2: %d mV (Accumulated: %.1f, Count: %d)\n",
+                 g_adc2_mV, g_adc2_sum, g_adc2_count);
+
+    powerUnit.powerT1off();
+
+    // Decisione: vado in B?
+    if (g_cycleCount % GROUP_B_MULT == 0) {
+      g_currentState = STATE_READ_GROUP_B;
+    } else if (g_cycleCount % GROUP_C_MULT == 0) {
+      g_currentState = STATE_READ_GROUP_C;
+    } else {
+      // Niente B e niente C, verifichiamo se mandare LoRa o dormire
+      if (g_cycleCount % LORA_TX_MULT == 0)
+        g_currentState = STATE_LORA_PREPARE;
+      else
+        g_currentState = STATE_PREPARE_SLEEP;
+    }
+  } break;
+
+  case STATE_READ_GROUP_B: {
+    DEBUG_PRINTLN(
+        "---------------- READ GROUP B (T2: Wind Direction) ---------------");
+
+    powerUnit.powerT2on();
+
+    // Lettura Direzione Vento (AS5600 I2C)
+    wind.update();
+    float deg = wind.getDirectionDegrees();
+
+    // Accumulo vettoriale per media (seno e coseno)
+    float rad = deg * PI / 180.0f;
+    g_wind_sin_sum += sin(rad);
+    g_wind_cos_sum += cos(rad);
+    g_wind_count++;
+
+    DEBUG_PRINTF("[READ B] Wind Dir: %.1f deg (Accumulated Sin/Cos sum, "
+                 "Count: %d)\n",
+                 deg, g_wind_count);
+
+    powerUnit.powerT2off();
+
+    // Decisione: vado in C?
+    if (g_cycleCount % GROUP_C_MULT == 0) {
+      g_currentState = STATE_READ_GROUP_C;
+    } else {
+      // Niente C, verifichiamo se mandare LoRa o dormire
+      if (g_cycleCount % LORA_TX_MULT == 0)
+        g_currentState = STATE_LORA_PREPARE;
+      else
+        g_currentState = STATE_PREPARE_SLEEP;
+    }
+  } break;
+
+  case STATE_READ_GROUP_C: {
+    DEBUG_PRINTLN(
+        "---------------- READ GROUP C (T3: Sensors + INA) ---------------");
+
+    powerUnit.powerT3on();
+
+    // Lettura Sensori Ambiente e Potenza
     powerUnit.readINA();
     powerUnit.readBattery();
     TCA.read();
     DS.read();
-    // Sincronizziamo il debug
-    lastDebugCount = g_currentCount;
-    counterUnit.measure();
-    DEBUG_PRINTF("[_^_ DEBUG: READ A] loop #%d (Count is: %d, was %d)\n",
-                 g_cycleCount, g_currentCount, lastDebugCount);
-    // Lettura Vento (AGGIUNGI QUESTO)
-    wind.update();
 
-    g_currentState = STATE_READ_GROUP_B;
-  } break;
+    DEBUG_PRINTF("[READ C] Bat: %d mV, Solar: %d mV\n", g_battery_mV,
+                 g_loadVoltage_mV);
 
-  case STATE_READ_GROUP_B:
-    g_currentState = STATE_READ_GROUP_C;
-    break;
+    powerUnit.powerT3off();
 
-  case STATE_READ_GROUP_C:
-    if (DEBUG_OLED)
+    // Calcolo Medie Finali per Payload
+    if (g_adc2_count > 0) {
+      g_adc2_mV = (uint16_t)(g_adc2_sum / g_adc2_count);
+    }
+    if (g_wind_count > 0) {
+      float avg_rad = atan2(g_wind_sin_sum, g_wind_cos_sum);
+      float avg_deg = avg_rad * 180.0f / PI;
+      if (avg_deg < 0)
+        avg_deg += 360.0f;
+      g_wind_dir_avg_deg = avg_deg;
+    }
+
+    // Dopo ogni C, mostriamo OLED (se attivo) e poi inviamo
+    if (DEBUG_OLED) {
       g_currentState = STATE_DEBUG_OLED;
-    else
+    } else {
       g_currentState = STATE_LORA_PREPARE;
-    break;
+    }
+  } break;
 
   case STATE_DEBUG_OLED: {
     bool fin = true;
@@ -280,26 +356,27 @@ void runStateMachine() {
     fin = displayUnit.refresh();
 #endif
     if (fin) {
-      if (g_cycleCount % 2 != 0) {
-        g_currentState = STATE_LORA_PREPARE;
-      } else {
-        DEBUG_PRINTLN(F("[DBG] Skip TX (Test)."));
-        g_currentState = STATE_PREPARE_SLEEP;
-      }
+      // Dopo l'OLED di fine Gruppo C, andiamo all'invio
+      g_currentState = STATE_LORA_PREPARE;
     }
   } break;
 
   case STATE_LORA_PREPARE: {
-    DEBUG_PRINTLN(F("---STATE_LORA_PREPARE----"));
+    DEBUG_PRINTLN("---STATE_LORA_PREPARE----");
 
-    DEBUG_PRINTLN(F("[LORA] Finalizing Payload..."));
+    DEBUG_PRINTLN("[LORA] Finalizing Payload with Average Data...");
     PayloadMgr.preparePayload();
-
-    // Aggiorna parametri TX (per visualizzazione su OLED)
-    PayloadMgr.updateTxParamsFromMAC();
 
     memcpy(appData, PayloadMgr.getBuffer(), PayloadMgr.getSize());
     appDataSize = PayloadMgr.getSize();
+
+    // Reset degli accumulatori per il prossimo ciclo di medie
+    g_adc2_sum = 0;
+    g_adc2_count = 0;
+    g_wind_sin_sum = 0;
+    g_wind_cos_sum = 0;
+    g_wind_count = 0;
+    g_txCount++; // Incremento contatore invii (X)
 
     g_currentState = STATE_LORA_SEND;
   } break;
@@ -307,19 +384,17 @@ void runStateMachine() {
   case STATE_LORA_SEND:
 
     if (IsLoRaMacNetworkJoined) {
-      DEBUG_PRINTLN(F("[LORA] Sending packet (Background)..."));
+      DEBUG_PRINTLN("[LORA] Sending packet (Background)...");
 
       MlmeReq_t mlmeReq;
       mlmeReq.Type = MLME_LINK_CHECK;
       LoRaMacMlmeRequest(&mlmeReq);
-      PayloadMgr.captureTxParams(current_dr, current_txpwr);
 
       LoRaWAN.send();
 
     } else {
-      DEBUG_PRINTLN(F("[LORA] Network not joined. Skip TX."));
+      DEBUG_PRINTLN("[LORA] Network not joined. Skip TX.");
       // Opzionale: lanciare un join se non è già in corso
-      PayloadMgr.handleTxTimeout();
       g_currentState = STATE_WAIT_FOR_JOIN;
       break;
     }
@@ -328,7 +403,7 @@ void runStateMachine() {
     break;
 
   case STATE_PREPARE_SLEEP: {
-    DEBUG_PRINTLN(F("---PREPARE_SLEEP----"));
+    DEBUG_PRINTLN("---PREPARE_SLEEP----");
 
     // Sincronizziamo il debug all'avvio
     lastDebugCount = g_currentCount;
@@ -347,7 +422,7 @@ void runStateMachine() {
         "[_^_ DEBUG: SLEEP (pow. off)] loop #%d (Count is: %d, was %d)\n",
         g_cycleCount, g_currentCount, lastDebugCount);
 
-    g_cycleCount++;
+    // g_cycleCount incrementato all'inizio del ciclo in STATE_IDLE
     TimerSetValue(&g_sleepTimer, TIME_UNIT_MS);
     TimerStart(&g_sleepTimer);
     g_wakeUpFlag = false;
@@ -361,40 +436,4 @@ void runStateMachine() {
     g_currentState = STATE_IDLE;
     break;
   }
-}
-
-void downLinkDataHandle(McpsIndication_t *mcpsIndication) {
-  // Verifica che il puntatore sia valido
-  if (mcpsIndication == nullptr) {
-    DEBUG_PRINTLN(F("[DOWNLINK] ERROR: mcpsIndication is NULL"));
-    return;
-  }
-
-  // Log del downlink ricevuto
-  DEBUG_PRINTLN(F("\n[DOWNLINK] ========== DOWNLINK RECEIVED =========="));
-  DEBUG_PRINTF("[DOWNLINK] Status: %d\n", mcpsIndication->Status);
-  DEBUG_PRINTF("[DOWNLINK] RSSI: %d dBm\n", mcpsIndication->Rssi);
-  DEBUG_PRINTF("[DOWNLINK] SNR: %d dB\n", mcpsIndication->Snr);
-  DEBUG_PRINTF("[DOWNLINK] RxDatarate: DR%d\n", mcpsIndication->RxDatarate);
-
-  // Salva SEMPRE i metadati (anche se lo status non è OK, per debug)
-  saved_rssi = mcpsIndication->Rssi;
-  saved_snr = mcpsIndication->Snr;
-  saved_datarate = mcpsIndication->RxDatarate;
-  saved_status = mcpsIndication->Status;
-
-  // Verifica se lo status è OK (0 = LORAMAC_EVENT_INFO_STATUS_OK)
-  if (mcpsIndication->Status == LORAMAC_EVENT_INFO_STATUS_OK) {
-    DEBUG_PRINTLN(F("[DOWNLINK] Status: OK - Downlink valido!"));
-
-    // Se ci sono dati nel payload, puoi processarli qui
-    if (mcpsIndication->BufferSize > 0) {
-      DEBUG_PRINTF("[DOWNLINK] Payload size: %d bytes\n",
-                   mcpsIndication->BufferSize);
-    }
-  } else {
-    DEBUG_PRINTF("[DOWNLINK] Status: ERROR (%d)\n", mcpsIndication->Status);
-  }
-
-  DEBUG_PRINTLN(F("[DOWNLINK] =========================================\n"));
 }

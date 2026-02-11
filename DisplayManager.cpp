@@ -3,9 +3,6 @@
 #include "tca_i2c_manager.h"
 #include <stdio.h>
 
-extern volatile int16_t saved_rssi;
-extern volatile int8_t saved_snr;
-
 // ============================================
 // COSTRUTTORE E INIT
 // ============================================
@@ -138,24 +135,28 @@ void DisplayManager::drawPageProgressBar() {
 // ============================================
 void DisplayManager::drawPageRainCounter() {
   int y = 2;
-  char buf[20];
+  char buf[32];
 
   display.setFont(ArialMT_Plain_10);
-  display.drawString(0, y, "RAIN COUNT");
+  display.drawString(0, y, "STATUS X.Y.Z");
   y += 14;
   display.drawLine(0, y, 64, y);
   y += 4;
 
+  uint32_t X = g_txCount + 1;
+  uint32_t Y = ((g_cycleCount - 1) % LORA_TX_MULT) + 1;
+  uint32_t Z = ((g_cycleCount - 1) % GROUP_B_MULT) + 1;
+
   display.setFont(ArialMT_Plain_16);
-  snprintf(buf, sizeof(buf), "%d", g_currentCount);
+  snprintf(buf, sizeof(buf), "%d.%d.%d", (int)X, (int)Y, (int)Z);
   display.drawString(2, y, buf);
   y += 18;
 
   display.setFont(ArialMT_Plain_10);
-  snprintf(buf, sizeof(buf), "Last: %d", g_lastCountValue);
+  snprintf(buf, sizeof(buf), "Tot: %d", (int)g_cycleCount);
   display.drawString(2, y, buf);
   y += 11;
-  snprintf(buf, sizeof(buf), "Cycle: %d", g_cycleCount);
+  snprintf(buf, sizeof(buf), "Rain: %d", g_currentCount);
   display.drawString(2, y, buf);
 
   drawPageProgressBar();
@@ -392,7 +393,6 @@ void DisplayManager::drawPageDS2482() {
 // ============================================
 void DisplayManager::drawPageLoRaWAN() {
   int y = 0;
-  char buf[32];
 
   display.setFont(ArialMT_Plain_10);
   display.setTextAlignment(TEXT_ALIGN_CENTER);
@@ -401,52 +401,15 @@ void DisplayManager::drawPageLoRaWAN() {
 
   y += 12;
   display.drawLine(0, y, 64, y);
-  y += 3;
+  y += 10;
 
   // 1. Stato Rete (JOIN)
-  display.drawString(0, y, PayloadMgr.isNetworkJoined() ? "JOINED" : "NO NET");
-  y += 11;
+  display.setFont(ArialMT_Plain_16);
+  display.setTextAlignment(TEXT_ALIGN_CENTER);
+  display.drawString(32, y, PayloadMgr.isNetworkJoined() ? "JOINED" : "NO NET");
 
-  // 2. DOWNLINK METADATA - RSSI
-  if (saved_status != 0xFF) { // 0xFF = nessun downlink ricevuto
-    snprintf(buf, sizeof(buf), "RSSI:%ddBm", saved_rssi);
-    display.drawString(0, y, buf);
-    y += 11;
-
-    // 3. SNR
-    snprintf(buf, sizeof(buf), "SNR:%ddB", saved_snr);
-    display.drawString(0, y, buf);
-    y += 11;
-
-    // 4. Datarate (DR)
-    snprintf(buf, sizeof(buf), "DR:%d", saved_datarate);
-    display.drawString(0, y, buf);
-    y += 11;
-
-    // 5. Status del downlink
-    if (saved_status == 0) {
-      display.drawString(0, y, "St:OK");
-    } else {
-      snprintf(buf, sizeof(buf), "St:ERR:%d", saved_status);
-      display.drawString(0, y, buf);
-    }
-  } else {
-    // Nessun downlink ricevuto ancora
-    display.drawString(0, y, "No DL yet");
-    y += 11;
-    display.drawString(0, y, "Waiting...");
-  }
-
-  y += 13;
+  y += 25;
   display.drawLine(0, y, 64, y);
-  y += 3;
-
-  // 6. Contatori Uplink/Downlink
-  snprintf(buf, sizeof(buf), "UP:%d", PayloadMgr.getUplinkCounter());
-  display.drawString(0, y, buf);
-  y += 11;
-  snprintf(buf, sizeof(buf), "DN:%d", PayloadMgr.getDownlinkCounter());
-  display.drawString(0, y, buf);
 
   drawPageProgressBar();
 }
